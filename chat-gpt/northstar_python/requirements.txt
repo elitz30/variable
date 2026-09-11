@@ -1,0 +1,10 @@
+# Recommended interpreter: Python 3.11 (the ML packages may not yet publish wheels for Python 3.14).
+numpy>=1.26
+opencv-python>=4.10
+insightface>=0.7.3
+onnxruntime-gpu>=1.19
+ultralytics>=8.3
+torch>=2.5
+torchaudio>=2.5
+speechbrain>=1.0
+sounddevice>=0.5

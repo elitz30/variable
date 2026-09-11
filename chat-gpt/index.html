@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e9e4d8" />
+    <title>Northstar — Field recognition</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="masthead">
+        <a class="wordmark" href="#top" aria-label="Northstar home"><span class="mark">N</span><span>NORTHSTAR</span></a>
+        <p class="edition">FIELD RECOGNITION TOOL <span>—</span> 01</p>
+        <div class="mast-actions"><span class="model-status" id="modelStatus" aria-live="polite"><i></i>LOADING</span><button class="plain-button" id="privacyButton" type="button">PRIVACY NOTE</button></div>
+      </header>
+
+      <section class="intro" id="top">
+        <div><p class="kicker">LOCAL VISION + LISTENING</p><h1>Make a small<br />index of <em>your world.</em></h1></div>
+        <p class="intro-copy">Northstar sees common objects, remembers faces you teach it, and can learn a rough voice cue. Nothing needs an account.</p>
+      </section>
+
+      <section class="workbench" aria-label="Recognition workbench">
+        <article class="viewer-panel">
+          <div class="panel-topline"><span>VIEWFINDER</span><strong id="sourceTitle">NO SOURCE</strong><button class="expand-button" id="fullscreenButton" type="button" title="Full screen view" aria-label="Toggle full screen view">EXPAND ↗</button></div>
+          <div class="stage" id="stage">
+            <video id="camera" autoplay muted playsinline></video>
+            <img id="photoPreview" alt="Selected photo for recognition" />
+            <canvas id="overlay" aria-label="Recognition results"></canvas>
+            <div class="empty-stage" id="stagePlaceholder"><span class="reticle" aria-hidden="true"></span><strong>Frame something.</strong><p>Open the camera or load an image to begin.</p></div>
+          </div>
+          <div class="camera-controls">
+            <button class="ink-button" id="cameraButton" type="button"><span>●</span> OPEN CAMERA</button>
+            <label class="line-button" for="imageInput"><span>↑</span> LOAD IMAGE<input id="imageInput" type="file" accept="image/*" /></label>
+            <button class="line-button" id="captureButton" type="button" disabled><span>□</span> CAPTURE FACE</button>
+            <button class="plain-button stop-button" id="stopButton" type="button" disabled>STOP</button>
+          </div>
+          <p class="system-note" id="scanHint">Models are warming up.</p>
+          <p class="file-status" id="fileStatus" hidden aria-live="polite"></p>
+          <div class="speaker-strip" id="speakerStrip">
+            <div class="speaker-title"><span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>VOICE CHECK</span></div>
+            <div class="speaker-readout"><strong id="speakerName">Microphone is off</strong><small id="speakerDetail">Teach a voice cue, then start listening.</small></div>
+            <button class="listen-button" id="listenButton" type="button" disabled>START LISTENING</button>
+          </div>
+        </article>
+
+        <aside class="ledger-panel" aria-label="Recognition results">
+          <div class="panel-topline"><span>OBSERVATION LEDGER</span><button class="plain-button" id="clearLogButton" type="button">CLEAR</button></div>
+          <div class="ledger-total" id="recognitionSummary"><strong>—</strong><span>WAITING FOR A VIEW</span></div>
+          <div class="result-list" id="resultList" aria-live="polite"><div class="empty-results"><p>Faces and objects detected in the frame are listed here.</p></div></div>
+          <div class="legend"><span><i class="face-dot"></i>KNOWN / UNKNOWN FACE</span><span><i class="object-dot"></i>OBJECT</span></div>
+        </aside>
+      </section>
+
+      <section class="memory-section" aria-labelledby="memoryTitle">
+        <div class="memory-heading"><div><p class="kicker">LOCAL SUBJECT INDEX</p><h2 id="memoryTitle">People remembered here <span id="peopleCount">0</span></h2><p>Face images are turned into local descriptors. Voice samples become a compact sound profile. Original photos and audio are not retained.</p></div><button class="ink-button rust" id="enrollButton" type="button">+ ADD PERSON</button></div>
+        <div class="person-grid" id="personGrid"><button class="add-person-card" id="emptyEnrollButton" type="button"><span>+</span><strong>ADD A PERSON</strong><small>Label a face, then teach a voice if useful.</small></button></div>
+      </section>
+
+      <footer class="method"><p><span>HOW IT WORKS</span> Face and voice descriptors are compared on your device. An uncertain match stays unknown.</p><p>For consent and reliability, enroll only people who have agreed to be recognised.</p></footer>
+    </main>
+
+    <dialog id="enrollDialog" class="dialog">
+      <form id="enrollForm" method="dialog">
+        <button class="dialog-close" id="closeEnrollButton" type="button" aria-label="Close">×</button>
+        <p class="kicker">NEW ENTRY</p><h2>Put a face in the index.</h2><p class="dialog-copy">Use one to six clear photos containing only this person. A snapshot from the camera can be used too.</p>
+        <label class="field-label" for="personName">NAME OR NICKNAME</label><input class="text-input" id="personName" name="personName" maxlength="42" autocomplete="off" placeholder="e.g. Maya" required />
+        <label class="drop-zone" for="enrollmentImages" id="dropZone"><input id="enrollmentImages" type="file" accept="image/*" multiple required /><span>↑</span><strong>CHOOSE FACE PHOTOS</strong><small id="fileCount">1–6 images · the photos are not kept</small></label>
+        <div class="enroll-feedback" id="enrollFeedback" aria-live="polite"></div><button class="ink-button wide" id="savePersonButton" type="submit">SAVE FACE MEMORY</button>
+      </form>
+    </dialog>
+
+    <dialog id="voiceDialog" class="dialog">
+      <form method="dialog"><button class="dialog-close" id="closeVoiceButton" type="button" aria-label="Close">×</button><p class="kicker">VOICE CUE</p><h2>Teach a voice for <span id="voicePersonName"></span>.</h2><p class="dialog-copy">Speak naturally for six seconds in a quiet room. Northstar keeps a numerical sound profile only—not your audio recording.</p><div class="record-meter" id="recordMeter"><span></span><span></span><span></span><span></span><span></span><span></span><b id="recordSeconds">06</b></div><p class="voice-feedback" id="voiceFeedback">Ready to listen.</p><button class="ink-button wide" id="recordVoiceButton" type="button">RECORD 6-SECOND SAMPLE</button><button class="plain-button dialog-cancel" id="cancelVoiceButton" type="button">CANCEL</button></form>
+    </dialog>
+
+    <dialog id="privacyDialog" class="dialog">
+      <form method="dialog"><button class="dialog-close" id="closePrivacyButton" type="submit" aria-label="Close">×</button><p class="kicker">PRIVACY NOTE</p><h2>Local by design.</h2><p class="dialog-copy">Recognition runs in this browser. Face photos are converted to numerical descriptors; voice samples are converted to a numerical sound profile. Northstar saves those profiles plus the name you provide in this browser’s local database. It discards the photos and audio afterwards.</p><p class="dialog-copy">The public model files are downloaded when the app opens. Your camera frames, chosen photos, and microphone audio are not uploaded to the model host or to an app server.</p></form>
+    </dialog>
+
+    <template id="personTemplate"><article class="person-card"><div class="initials"></div><div class="person-detail"><h3></h3><p class="face-status"></p><p class="voice-status"></p></div><div class="card-actions"><button class="teach-voice-button" type="button">TEACH VOICE</button><button class="forget-button" type="button">FORGET</button></div></article></template>
+  </body>
+</html>
