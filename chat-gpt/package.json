@@ -1,0 +1,21 @@
+{
+  "name": "northstar-vision",
+  "version": "1.0.0",
+  "description": "Northstar Local Vision and Voice AI Dashboard",
+  "type": "module",
+  "scripts": {
+    "start": "northstar_python\\.venv\\Scripts\\python.exe northstar_python\\app.py",
+    "web": "node server.mjs",
+    "ai": "northstar_python\\.venv\\Scripts\\python.exe northstar_python\\app.py",
+    "camera": "northstar_python\\.venv\\Scripts\\python.exe northstar_python\\app.py camera"
+  },
+  "keywords": [
+    "ai",
+    "computer-vision",
+    "voice-recognition",
+    "insightface",
+    "yolo"
+  ],
+  "author": "",
+  "license": "ISC"
+}

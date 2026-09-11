@@ -1,47 +1,533 @@
-const FACE_MODEL_URL="https://justadudewhohacks.github.io/face-api.js/models",DB="northstar-vision",STORE="people",FACE_LIMIT=.52,VOICE_LIMIT=.78,MAX_PHOTOS=6,VOICE_MS=6000;
-const $=s=>document.querySelector(s),el={camera:$("#camera"),photo:$("#photoPreview"),overlay:$("#overlay"),stage:$("#stage"),modelStatus:$("#modelStatus"),sourceTitle:$("#sourceTitle"),scanHint:$("#scanHint"),fileStatus:$("#fileStatus"),cameraButton:$("#cameraButton"),imageInput:$("#imageInput"),captureButton:$("#captureButton"),stopButton:$("#stopButton"),fullscreenButton:$("#fullscreenButton"),resultList:$("#resultList"),recognitionSummary:$("#recognitionSummary"),clearLogButton:$("#clearLogButton"),peopleCount:$("#peopleCount"),personGrid:$("#personGrid"),personTemplate:$("#personTemplate"),enrollButton:$("#enrollButton"),emptyEnrollButton:$("#emptyEnrollButton"),enrollDialog:$("#enrollDialog"),enrollForm:$("#enrollForm"),personName:$("#personName"),enrollmentImages:$("#enrollmentImages"),dropZone:$("#dropZone"),fileCount:$("#fileCount"),enrollFeedback:$("#enrollFeedback"),savePersonButton:$("#savePersonButton"),closeEnrollButton:$("#closeEnrollButton"),privacyButton:$("#privacyButton"),privacyDialog:$("#privacyDialog"),closePrivacyButton:$("#closePrivacyButton"),speakerStrip:$("#speakerStrip"),speakerName:$("#speakerName"),speakerDetail:$("#speakerDetail"),listenButton:$("#listenButton"),voiceDialog:$("#voiceDialog"),closeVoiceButton:$("#closeVoiceButton"),cancelVoiceButton:$("#cancelVoiceButton"),voicePersonName:$("#voicePersonName"),recordVoiceButton:$("#recordVoiceButton"),recordMeter:$("#recordMeter"),recordSeconds:$("#recordSeconds"),voiceFeedback:$("#voiceFeedback")};
-let objectModel,ready=false,active=null,kind="",cameraStream,photoURL,scanTimer,scanning=false,objects=[],nextObjects=0,lastResults=[],people=[];
-let audioStream,audioContext,audioAnalyser,freq,time,listening=false,listenTimer,recording=false,recordTimer,voiceSamples=[],voiceId;
+/**
+ * Northstar Vision — Web Frontend Client
+ * Connects directly to the Python AI Companion (InsightFace, YOLO-World, SpeechBrain ECAPA).
+ */
 
-const setStatus=(text,isReady=false)=>{el.modelStatus.textContent=text;el.modelStatus.classList.toggle("ready",isReady);el.scanHint.textContent=text};
-const escape=s=>String(s).replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
-const distance=(a,b)=>{let n=Math.min(a.length,b.length),t=0;if(!n)return Infinity;for(let i=0;i<n;i++)t+=(a[i]-b[i])**2;return Math.sqrt(t/n)};
-const initials=name=>name.split(/\s+/).filter(Boolean).slice(0,2).map(p=>p[0]).join("").toUpperCase()||"?";
-const voices=()=>people.filter(p=>Array.isArray(p.voicePrint)&&p.voicePrint.length).length;
-function db(){return new Promise((ok,no)=>{let r=indexedDB.open(DB,1);r.onupgradeneeded=()=>{if(!r.result.objectStoreNames.contains(STORE))r.result.createObjectStore(STORE,{keyPath:"id"})};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
-async function getPeople(){let d=await db();return new Promise((ok,no)=>{let r=d.transaction(STORE,"readonly").objectStore(STORE).getAll();r.onsuccess=()=>{d.close();ok(r.result||[])};r.onerror=()=>{d.close();no(r.error)}})}
-async function put(person){let d=await db();return new Promise((ok,no)=>{let r=d.transaction(STORE,"readwrite").objectStore(STORE).put(person);r.onsuccess=()=>{d.close();ok()};r.onerror=()=>{d.close();no(r.error)}})}
-async function remove(id){let d=await db();return new Promise((ok,no)=>{let r=d.transaction(STORE,"readwrite").objectStore(STORE).delete(id);r.onsuccess=()=>{d.close();ok()};r.onerror=()=>{d.close();no(r.error)}})}
-function speaker(name,detail,active=false){el.speakerName.textContent=name;el.speakerDetail.textContent=detail;el.speakerStrip.classList.toggle("listening",active)}
-function renderPeople(){el.peopleCount.textContent=people.length;[...el.personGrid.querySelectorAll(".person-card")].forEach(x=>x.remove());for(let p of people){let c=el.personTemplate.content.firstElementChild.cloneNode(true),has=Array.isArray(p.voicePrint)&&p.voicePrint.length;c.querySelector(".initials").textContent=initials(p.name);c.querySelector("h3").textContent=p.name;c.querySelector(".face-status").textContent=`${p.descriptors.length} face sample${p.descriptors.length===1?"":"s"}`;c.querySelector(".voice-status").textContent=has?"Voice cue stored":"No voice cue";let teach=c.querySelector(".teach-voice-button");teach.textContent=has?"RETEACH VOICE":"TEACH VOICE";teach.onclick=()=>openVoice(p.id);c.querySelector(".forget-button").onclick=async()=>{if(!confirm(`Forget ${p.name}? Their face and voice profiles will be removed from this browser.`))return;await remove(p.id);people=people.filter(x=>x.id!==p.id);renderPeople();if(!voices())stopListening("No stored voice cues.")};el.personGrid.insertBefore(c,el.personGrid.firstChild)}el.listenButton.disabled=!voices();if(!voices()&&!listening)speaker("Microphone is off","Teach a voice cue, then start listening.")}
-function faceMatch(d){let best={name:"Unknown face",distance:Infinity,known:false};for(let p of people)for(let stored of p.descriptors){let v=distance(d,stored)*Math.sqrt(d.length);if(v<best.distance)best={name:p.name,distance:v,known:v<=FACE_LIMIT}}return best.known?best:{name:"Unknown face",distance:best.distance,known:false}}
-function renderResults(results){lastResults=results;let f=results.filter(x=>x.kind==="face").length,o=results.length-f;el.recognitionSummary.innerHTML=`<strong>${results.length||"—"}</strong><span>${results.length?`${f} FACE · ${o} OBJECT${o===1?"":"S"}`:"WAITING FOR A VIEW"}</span>`;if(!results.length){el.resultList.innerHTML='<div class="empty-results"><p>Faces and objects detected in the frame are listed here.</p></div>';return}el.resultList.innerHTML=results.slice(0,12).map(x=>{let conf=x.kind==="face"?(x.known?Math.round(Math.max(0,1-x.distance/FACE_LIMIT)*100):null):Math.round(x.score*100),sub=x.kind==="face"?(x.known?"Face memory match":"Not in the local index"):"Object detected";return `<div class="result-row"><i class="result-mark ${x.kind}"></i><div class="result-label"><strong>${escape(x.label)}</strong><span>${sub}</span></div><span class="confidence">${conf===null?"—":`${conf}%`}</span></div>`}).join("")}
-function draw(results){let sw=active?.videoWidth||active?.naturalWidth||0,sh=active?.videoHeight||active?.naturalHeight||0;if(!sw||!sh)return;let r=el.stage.getBoundingClientRect(),d=devicePixelRatio||1,c=el.overlay.getContext("2d"),s=Math.min(r.width/sw,r.height/sh),ox=(r.width-sw*s)/2,oy=(r.height-sh*s)/2;el.overlay.width=Math.round(r.width*d);el.overlay.height=Math.round(r.height*d);c.setTransform(d,0,0,d,0,0);c.clearRect(0,0,r.width,r.height);c.textBaseline="middle";for(let x of results){let l=ox+x.box.x*s,t=oy+x.box.y*s,w=x.box.width*s,h=x.box.height*s,color=x.kind==="face"?"#70d1bd":"#e66944",label=x.kind==="face"&&!x.known?"UNKNOWN FACE":x.label.toUpperCase();c.strokeStyle=color;c.lineWidth=2;c.strokeRect(l,t,w,h);c.font="800 10px Arial";let lw=Math.min(c.measureText(label).width+15,Math.max(52,r.width-l)),lt=Math.max(oy,t-20);c.fillStyle=color;c.fillRect(l,lt,lw,18);c.fillStyle="#161817";c.fillText(label,l+7,lt+9)}}
-async function scan(){if(!ready||!active||scanning||!(active.videoWidth||active.naturalWidth))return;scanning=true;try{let found=await faceapi.detectAllFaces(active,new faceapi.TinyFaceDetectorOptions({inputSize:kind==="camera"?192:320,scoreThreshold:.42})).withFaceLandmarks().withFaceDescriptors();if(kind==="photo"||performance.now()>=nextObjects){let d=await objectModel.detect(active,5,.56);objects=d.map(x=>({kind:"object",label:x.class,score:x.score,box:{x:x.bbox[0],y:x.bbox[1],width:x.bbox[2],height:x.bbox[3]}}));nextObjects=performance.now()+(kind==="camera"?1800:Number.MAX_SAFE_INTEGER)}let faces=found.map(x=>{let m=faceMatch(Array.from(x.descriptor));return{kind:"face",label:m.name,known:m.known,distance:m.distance,box:x.detection.box}}),results=[...faces,...objects].sort((a,b)=>(b.score||1)-(a.score||1));renderResults(results);draw(results);if(kind==="photo")el.fileStatus.textContent=`SCAN COMPLETE · ${results.length} RESULT${results.length===1?"":"S"} · LOCAL ONLY`}catch(e){console.error(e);el.scanHint.textContent="Recognition paused. Reload this page if the issue continues.";if(kind==="photo")el.fileStatus.textContent="FILE UPLOADED · RECOGNITION PAUSED"}finally{scanning=false}}
-function startScan(){clearInterval(scanTimer);objects=[];nextObjects=0;scan();if(kind==="camera")scanTimer=setInterval(scan,600)}function stopScan(){clearInterval(scanTimer);scanTimer=null;scanning=false}
-function setSource(src,type,title){stopScan();active=src;kind=type;el.stage.classList.add("active");el.stage.dataset.source=type;el.sourceTitle.textContent=title.toUpperCase();el.stopButton.disabled=false;el.captureButton.disabled=type!=="camera";renderResults([]);if(ready){el.scanHint.textContent=type==="camera"?"Scanning faces often; objects refresh every few seconds.":"Reading this image locally.";startScan()}}
-function stopCamera(){if(cameraStream)cameraStream.getTracks().forEach(x=>x.stop());cameraStream=null;el.camera.srcObject=null;el.captureButton.disabled=true}
-function reset(){stopScan();stopCamera();if(photoURL)URL.revokeObjectURL(photoURL);photoURL=null;active=null;kind="";el.stage.classList.remove("active");delete el.stage.dataset.source;el.photo.removeAttribute("src");el.sourceTitle.textContent="NO SOURCE";el.stopButton.disabled=true;el.cameraButton.innerHTML="<span>●</span> OPEN CAMERA";el.overlay.getContext("2d").clearRect(0,0,el.overlay.width,el.overlay.height);el.fileStatus.hidden=true;renderResults([]);el.scanHint.textContent=ready?"Open the camera or load an image.":"Models are warming up."}
-async function openCamera(){if(!navigator.mediaDevices?.getUserMedia){el.scanHint.textContent="Camera access is not available in this browser. Try LOAD IMAGE.";return}try{stopCamera();cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1280},height:{ideal:720},frameRate:{ideal:24,max:30}},audio:false});el.camera.srcObject=cameraStream;await new Promise(ok=>el.camera.onloadedmetadata=ok);await el.camera.play();setSource(el.camera,"camera","live camera");el.cameraButton.innerHTML="<span>●</span> CAMERA OPEN"}catch(e){console.error(e);el.scanHint.textContent="Camera permission was not granted. You can still load an image."}}
-async function openPhoto(file){if(!file)return;stopCamera();stopScan();if(photoURL)URL.revokeObjectURL(photoURL);el.fileStatus.hidden=false;el.fileStatus.textContent=`FILE UPLOADED · ${file.name} · ${(file.size/1048576).toFixed(1)} MB · PREPARING FAST SCAN`;try{let image=await toImage(file),edge=Math.max(image.naturalWidth,image.naturalHeight),limit=1600;if(edge>limit){let scale=limit/edge,canvas=document.createElement("canvas");canvas.width=Math.round(image.naturalWidth*scale);canvas.height=Math.round(image.naturalHeight*scale);canvas.getContext("2d",{alpha:false}).drawImage(image,0,0,canvas.width,canvas.height);let blob=await new Promise(ok=>canvas.toBlob(ok,"image/jpeg",.9));photoURL=URL.createObjectURL(blob)}else photoURL=URL.createObjectURL(file);el.photo.onload=()=>{el.fileStatus.textContent=`FILE UPLOADED · ${file.name} · READING FACE & OBJECTS`;setSource(el.photo,"photo",file.name.length>24?"selected image":file.name)};el.photo.src=photoURL;el.imageInput.value=""}catch(error){console.error(error);el.fileStatus.textContent="FILE COULD NOT BE PREPARED · TRY A DIFFERENT IMAGE"}}
-function updateFiles(){let files=[...el.enrollmentImages.files].slice(0,MAX_PHOTOS);el.dropZone.classList.toggle("has-files",!!files.length);el.fileCount.textContent=files.length?`${files.length} photo${files.length===1?"":"s"} ready · only face descriptors will be saved`:"1–6 images · the photos are not kept"}
-function setFiles(files){let d=new DataTransfer();files.slice(0,MAX_PHOTOS).forEach(x=>d.items.add(x));el.enrollmentImages.files=d.files;updateFiles()}
-function openEnroll(file){if(!ready){el.scanHint.textContent="Face enrollment will be available once the local models have loaded.";return}el.enrollForm.reset();el.enrollFeedback.textContent="";file?setFiles([file]):updateFiles();el.enrollDialog.showModal();setTimeout(()=>el.personName.focus(),100)}
-function capture(){if(kind!=="camera"||!el.camera.videoWidth)return;let c=document.createElement("canvas");c.width=el.camera.videoWidth;c.height=el.camera.videoHeight;c.getContext("2d").drawImage(el.camera,0,0,c.width,c.height);c.toBlob(b=>{if(b)openEnroll(new File([b],`northstar-face-${Date.now()}.jpg`,{type:"image/jpeg"}))},"image/jpeg",.93)}
-function toImage(file){return new Promise((ok,no)=>{let i=new Image(),u=URL.createObjectURL(file);i.onload=()=>{URL.revokeObjectURL(u);ok(i)};i.onerror=()=>{URL.revokeObjectURL(u);no(new Error("That image could not be read."))};i.src=u})}
-async function enroll(event){event.preventDefault();let name=el.personName.value.trim(),files=[...el.enrollmentImages.files].slice(0,MAX_PHOTOS);if(!name||!files.length)return;el.savePersonButton.disabled=true;el.savePersonButton.textContent="READING FACE…";let ds=[];try{for(let n=0;n<files.length;n++){el.enrollFeedback.textContent=`Looking at image ${n+1} of ${files.length}…`;let i=await toImage(files[n]),d=await faceapi.detectSingleFace(i,new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:.35})).withFaceLandmarks().withFaceDescriptor();if(d)ds.push(Array.from(d.descriptor))}if(!ds.length)throw new Error("No clear face was found. Use a well-lit, front-facing photo with one person.");let p={id:crypto.randomUUID(),name,descriptors:ds,createdAt:new Date().toISOString()};await put(p);people.push(p);renderPeople();el.enrollDialog.close();setStatus(`LOCAL MODELS READY · ${name.toUpperCase()} SAVED`,true);if(active)scan()}catch(e){el.enrollFeedback.textContent=e.message||"Could not save this face. Try a different photo."}finally{el.savePersonButton.disabled=false;el.savePersonButton.textContent="SAVE FACE MEMORY"}}
-function normal(v){let m=v.reduce((a,x)=>a+x,0)/v.length,s=Math.sqrt(v.reduce((a,x)=>a+(x-m)**2,0)/v.length)||1;return v.map(x=>(x-m)/s)}
-function average(samples){let n=samples[0]?.length||0;return normal(Array.from({length:n},(_,i)=>samples.reduce((a,x)=>a+x[i],0)/samples.length))}
-function voiceFeature(){if(!audioAnalyser||!freq||!time)return null;audioAnalyser.getFloatTimeDomainData(time);if(Math.sqrt(time.reduce((a,x)=>a+x*x,0)/time.length)<.018)return null;audioAnalyser.getByteFrequencyData(freq);let start=3,end=Math.min(150,freq.length),size=Math.max(1,Math.floor((end-start)/20)),out=[];for(let g=0;g<20;g++){let from=start+g*size,to=Math.min(end,from+size),sum=0;for(let i=from;i<to;i++)sum+=freq[i]/255;out.push(sum/Math.max(1,to-from))}return normal(out)}
-function voiceMatch(feature){let best={name:"Unknown speaker",distance:Infinity,known:false};for(let p of people)if(Array.isArray(p.voicePrint)&&p.voicePrint.length){let d=distance(feature,p.voicePrint);if(d<best.distance)best={name:p.name,distance:d,known:d<=VOICE_LIMIT}}return best.known?best:{name:"Unknown speaker",distance:best.distance,known:false}}
-async function connectMic(){if(!navigator.mediaDevices?.getUserMedia)throw new Error("No microphone access");audioStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:false},video:false});let C=window.AudioContext||window.webkitAudioContext;audioContext=new C();await audioContext.resume();audioAnalyser=audioContext.createAnalyser();audioAnalyser.fftSize=2048;audioAnalyser.smoothingTimeConstant=.72;audioContext.createMediaStreamSource(audioStream).connect(audioAnalyser);freq=new Uint8Array(audioAnalyser.frequencyBinCount);time=new Float32Array(audioAnalyser.fftSize)}
-async function freeMic(){clearInterval(listenTimer);clearInterval(recordTimer);listenTimer=null;recordTimer=null;if(audioStream)audioStream.getTracks().forEach(x=>x.stop());audioStream=null;if(audioContext)try{await audioContext.close()}catch(e){}audioContext=null;audioAnalyser=null;freq=null;time=null}
-async function toggleListen(){if(listening){stopListening();return}if(!voices()){speaker("No voice cues stored","Use TEACH VOICE on a person’s card first.");return}try{await freeMic();await connectMic();listening=true;el.listenButton.textContent="STOP LISTENING";speaker("Listening for a voice…","Speak near the microphone.",true);listenTimer=setInterval(()=>{let f=voiceFeature();if(!f){speaker("Listening for a voice…","No speech detected yet.",true);return}let m=voiceMatch(f);if(m.known)speaker(`${m.name} is likely speaking`,`Voice cue similarity: ${Math.round(Math.max(0,1-m.distance/VOICE_LIMIT)*100)}%`,true);else speaker("Unknown speaker","No close local voice cue found.",true)},360)}catch(e){console.error(e);listening=false;await freeMic();el.listenButton.textContent="START LISTENING";speaker("Microphone is unavailable","Permission was not granted. Voice listening remains off.")}}
-function stopListening(message="Microphone is off"){listening=false;freeMic();el.listenButton.textContent="START LISTENING";speaker(message,voices()?"Start listening when you are ready.":"Teach a voice cue, then start listening.")}
-function openVoice(id){let p=people.find(x=>x.id===id);if(!p)return;stopListening();voiceId=id;recording=false;voiceSamples=[];el.voicePersonName.textContent=p.name;el.voiceFeedback.textContent="Ready to listen.";el.recordSeconds.textContent="06";el.recordMeter.classList.remove("recording");el.recordVoiceButton.disabled=false;el.recordVoiceButton.textContent="RECORD 6-SECOND SAMPLE";el.voiceDialog.showModal()}
-async function recordVoice(){if(recording)return;try{await freeMic();await connectMic();recording=true;voiceSamples=[];let start=performance.now();el.recordMeter.classList.add("recording");el.recordVoiceButton.disabled=true;el.recordVoiceButton.textContent="LISTENING…";el.voiceFeedback.textContent="Speak naturally, at a normal distance from the microphone.";recordTimer=setInterval(()=>{let elapsed=performance.now()-start;el.recordSeconds.textContent=String(Math.max(0,Math.ceil((VOICE_MS-elapsed)/1000))).padStart(2,"0");let f=voiceFeature();if(f)voiceSamples.push(f);if(elapsed>=VOICE_MS)finishVoice()},120)}catch(e){console.error(e);el.voiceFeedback.textContent="Microphone permission was not granted.";recording=false;el.recordVoiceButton.disabled=false;el.recordVoiceButton.textContent="RECORD 6-SECOND SAMPLE"}}
-async function finishVoice(){if(!recording)return;recording=false;clearInterval(recordTimer);el.recordMeter.classList.remove("recording");let p=people.find(x=>x.id===voiceId);if(!p||voiceSamples.length<12){await freeMic();el.voiceFeedback.textContent="Too little clear speech was heard. Try again somewhere quieter.";el.recordVoiceButton.disabled=false;el.recordVoiceButton.textContent="RECORD 6-SECOND SAMPLE";return}p.voicePrint=average(voiceSamples);p.voiceUpdatedAt=new Date().toISOString();try{await put(p);renderPeople();el.voiceDialog.close();speaker(`${p.name} has a voice cue`,"Use START LISTENING to identify a likely speaker.")}catch(e){console.error(e);el.voiceFeedback.textContent="The voice cue could not be saved. Please try again.";el.recordVoiceButton.disabled=false;el.recordVoiceButton.textContent="RECORD 6-SECOND SAMPLE"}finally{await freeMic()}}
-function closeVoice(){recording=false;freeMic();el.recordMeter.classList.remove("recording");el.voiceDialog.close()}
-async function loadModels(){try{setStatus("LOADING LOCAL MODELS…");for(let runtime of [tf,faceapi.tf].filter(Boolean)){try{runtime.enableProdMode?.();await runtime.setBackend("webgl")}catch(error){console.info("Using browser graphics fallback",error)}for(let flag of [["WEBGL_PACK",true],["WEBGL_PACK_DEPTHWISECONV",true],["WEBGL_CPU_FORWARD",false]])try{runtime.env?.().set(...flag)}catch(error){console.info("Optional graphics flag unavailable",flag[0])}}await tf.ready();await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL),cocoSsd.load({base:"lite_mobilenet_v2"}).then(m=>objectModel=m)]);ready=true;setStatus("LOCAL MODELS READY · GPU TUNED",true);if(active)startScan()}catch(e){console.error(e);setStatus("MODELS UNAVAILABLE");el.scanHint.textContent="Connect to the internet once to load the public model files, then reload."}}
-function events(){el.cameraButton.onclick=openCamera;el.stopButton.onclick=reset;el.captureButton.onclick=capture;el.imageInput.onchange=e=>openPhoto(e.target.files[0]);el.enrollButton.onclick=()=>openEnroll();el.emptyEnrollButton.onclick=()=>openEnroll();el.closeEnrollButton.onclick=()=>el.enrollDialog.close();el.enrollForm.onsubmit=enroll;el.enrollmentImages.onchange=updateFiles;el.clearLogButton.onclick=()=>{renderResults([]);draw([])};el.fullscreenButton.onclick=()=>document.fullscreenElement?document.exitFullscreen():el.stage.requestFullscreen?.();el.privacyButton.onclick=()=>el.privacyDialog.showModal();el.closePrivacyButton.onclick=()=>el.privacyDialog.close();el.listenButton.onclick=toggleListen;el.recordVoiceButton.onclick=recordVoice;el.closeVoiceButton.onclick=closeVoice;el.cancelVoiceButton.onclick=closeVoice;el.voiceDialog.addEventListener("cancel",e=>{e.preventDefault();closeVoice()});addEventListener("resize",()=>draw(lastResults));addEventListener("beforeunload",()=>{stopCamera();freeMic()})}
-async function init(){events();try{people=await getPeople();renderPeople()}catch(e){console.error(e);el.scanHint.textContent="The local memory database could not be opened."}loadModels()}init();
+// Node.js Execution Guard: provide friendly terminal guidance if executed with `node app.js`
+if (typeof window === "undefined") {
+  console.log("\n========================================================");
+  console.log("       🌟 NORTHSTAR VISION & AUDIO RECOGNITION 🌟        ");
+  console.log("========================================================");
+  console.log("  app.js is a browser client interface.");
+  console.log("");
+  console.log("  👉 To start the AI Engine & Web Dashboard:");
+  console.log("     npm start");
+  console.log("     (or: northstar_python\\.venv\\Scripts\\python.exe northstar_python\\app.py)");
+  console.log("");
+  console.log("  👉 To launch the web server independently:");
+  console.log("     npm run web");
+  console.log("     (or: node server.mjs)");
+  console.log("");
+  console.log("  🌐 Web Dashboard: http://localhost:4173");
+  console.log("========================================================\n");
+  process.exit(0);
+}
+
+// DOM Selector Helper
+const $ = (selector) => document.querySelector(selector);
+
+const el = {
+  stage: $("#stage"),
+  liveFeed: $("#liveFeed"),
+  photo: $("#photoPreview"),
+  overlay: $("#overlay"),
+  modelStatus: $("#modelStatus"),
+  sourceTitle: $("#sourceTitle"),
+  scanHint: $("#scanHint"),
+  fileStatus: $("#fileStatus"),
+  cameraButton: $("#cameraButton"),
+  imageInput: $("#imageInput"),
+  vaultButton: $("#vaultButton"),
+  stopButton: $("#stopButton"),
+  fullscreenButton: $("#fullscreenButton"),
+  resultList: $("#resultList"),
+  recognitionSummary: $("#recognitionSummary"),
+  clearLogButton: $("#clearLogButton"),
+  peopleCount: $("#peopleCount"),
+  personGrid: $("#personGrid"),
+  personTemplate: $("#personTemplate"),
+  enrollButton: $("#enrollButton"),
+  emptyEnrollButton: $("#emptyEnrollButton"),
+  enrollDialog: $("#enrollDialog"),
+  enrollForm: $("#enrollForm"),
+  personName: $("#personName"),
+  enrollmentImages: $("#enrollmentImages"),
+  dropZone: $("#dropZone"),
+  fileCount: $("#fileCount"),
+  enrollFeedback: $("#enrollFeedback"),
+  savePersonButton: $("#savePersonButton"),
+  closeEnrollButton: $("#closeEnrollButton"),
+  privacyButton: $("#privacyButton"),
+  privacyDialog: $("#privacyDialog"),
+  closePrivacyButton: $("#closePrivacyButton"),
+  speakerStrip: $("#speakerStrip"),
+  speakerName: $("#speakerName"),
+  speakerDetail: $("#speakerDetail"),
+  listenButton: $("#listenButton"),
+  soundBars: $("#soundBars"),
+  voiceDialog: $("#voiceDialog"),
+  closeVoiceButton: $("#closeVoiceButton"),
+  cancelVoiceButton: $("#cancelVoiceButton"),
+  voicePersonName: $("#voicePersonName"),
+  recordVoiceButton: $("#recordVoiceButton"),
+  recordMeter: $("#recordMeter"),
+  recordSeconds: $("#recordSeconds"),
+  voiceFeedback: $("#voiceFeedback"),
+};
+
+// Application State
+let isConnected = false;
+let isStreaming = false;
+let isListening = true;
+let peopleList = [];
+let statusPollTimer = null;
+let currentVoiceTarget = "";
+let voiceCountdownTimer = null;
+
+// Sanitize text for HTML injection safety
+const escapeHtml = (str) =>
+  String(str).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]));
+
+// Generate up to 2 uppercase initials
+const getInitials = (name) =>
+  name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join("").toUpperCase() || "?";
+
+// Update the top right status badge
+function setModelStatus(text, isReady = false) {
+  if (!el.modelStatus) return;
+  el.modelStatus.textContent = text;
+  el.modelStatus.classList.toggle("ready", isReady);
+}
+
+// Generic API call wrapper
+async function apiCall(endpoint, method = "GET", data = null) {
+  const options = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (data && method !== "GET") {
+    options.body = JSON.stringify(data);
+  }
+  const response = await fetch(endpoint, options);
+  if (!response.ok) {
+    throw new Error(`API ${endpoint} failed with HTTP ${response.status}`);
+  }
+  return await response.json();
+}
+
+// Convert file to base64
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Synchronize people profiles from Python backend
+async function loadPeople() {
+  try {
+    const people = await apiCall("/api/people");
+    peopleList = people || [];
+    renderPeople();
+  } catch (err) {
+    console.warn("Could not fetch enrolled people:", err);
+  }
+}
+
+// Render people grid cards
+function renderPeople() {
+  if (!el.personGrid || !el.personTemplate) return;
+  el.peopleCount.textContent = peopleList.length;
+
+  // Clear existing cards, keeping the emptyEnrollButton
+  [...el.personGrid.querySelectorAll(".person-card")].forEach((c) => c.remove());
+
+  peopleList.forEach((person) => {
+    const card = el.personTemplate.content.firstElementChild.cloneNode(true);
+    card.querySelector(".initials").textContent = getInitials(person.name);
+    card.querySelector("h3").textContent = person.name;
+    card.querySelector(".face-status").textContent = `${person.faceCount || 1} face descriptor${person.faceCount === 1 ? "" : "s"}`;
+    card.querySelector(".voice-status").textContent = person.hasVoice ? "Voice cue active" : "No voice cue";
+
+    const teachBtn = card.querySelector(".teach-voice-button");
+    teachBtn.textContent = person.hasVoice ? "RETEACH VOICE" : "TEACH VOICE";
+    teachBtn.onclick = () => openVoiceModal(person.name);
+
+    const forgetBtn = card.querySelector(".forget-button");
+    forgetBtn.onclick = async () => {
+      if (confirm(`Remove ${person.name}? Face and voice data will be deleted.`)) {
+        try {
+          await apiCall("/api/forget", "POST", { name: person.name });
+          await loadPeople();
+        } catch (err) {
+          alert(`Error deleting profile: ${err.message}`);
+        }
+      }
+    };
+
+    el.personGrid.insertBefore(card, el.personGrid.firstChild);
+  });
+}
+
+// Render the real-time Observation Ledger
+function renderLedger(faces = [], objects = []) {
+  if (!el.resultList || !el.recognitionSummary) return;
+
+  const total = faces.length + objects.length;
+  el.recognitionSummary.innerHTML = `<strong>${total || "—"}</strong><span>${
+    total ? `${faces.length} FACE${faces.length === 1 ? "" : "S"} · ${objects.length} OBJECT${objects.length === 1 ? "" : "S"}` : "WAITING FOR A VIEW"
+  }</span>`;
+
+  if (total === 0) {
+    el.resultList.innerHTML = '<div class="empty-results"><p>Faces and objects detected in the frame are listed here.</p></div>';
+    return;
+  }
+
+  const rows = [];
+
+  // 1. Faces
+  faces.forEach((f) => {
+    const isKnown = f.name && f.name !== "Unknown face" && f.name !== "Unknown";
+    const conf = Math.round((f.score || 0.9) * 100);
+    const sub = isKnown ? "Enrolled Identity Match" : "Not in local vault";
+    rows.push(`
+      <div class="result-row">
+        <i class="result-mark face"></i>
+        <div class="result-label">
+          <strong>${escapeHtml(f.name.toUpperCase())}</strong>
+          <span>${sub}</span>
+        </div>
+        <span class="confidence">${conf}%</span>
+      </div>
+    `);
+  });
+
+  // 2. Objects
+  objects.forEach((o) => {
+    const conf = Math.round((o.score || 0.8) * 100);
+    rows.push(`
+      <div class="result-row">
+        <i class="result-mark object"></i>
+        <div class="result-label">
+          <strong>${escapeHtml(o.label.toUpperCase())}</strong>
+          <span>Object Detected (YOLO)</span>
+        </div>
+        <span class="confidence">${conf}%</span>
+      </div>
+    `);
+  });
+
+  el.resultList.innerHTML = rows.slice(0, 16).join("");
+}
+
+// Dynamically scale sound bar heights to live mic volume
+function animateSoundBars(vol = 0) {
+  if (!el.soundBars) return;
+  const bars = el.soundBars.querySelectorAll("i");
+  if (!bars.length) return;
+  const v = Math.min(1.0, Math.max(0.0, vol * 4.0));
+  bars.forEach((bar, idx) => {
+    if (v < 0.02) {
+      bar.style.height = `${[4, 10, 6, 4][idx]}px`;
+    } else {
+      const mult = [0.7, 1.25, 0.9, 0.65][idx];
+      const h = Math.max(4, Math.min(15, Math.round(v * 15 * mult)));
+      bar.style.height = `${h}px`;
+    }
+  });
+}
+
+// Render Voice Check strip
+function renderVoice(audio) {
+  if (!el.speakerName || !el.speakerDetail || !el.speakerStrip) return;
+
+  if (!isListening) {
+    el.speakerName.textContent = "Microphone paused";
+    el.speakerDetail.textContent = "Click START LISTENING to resume audio recognition.";
+    el.speakerStrip.classList.remove("listening");
+    if (el.listenButton) {
+      el.listenButton.textContent = "START LISTENING";
+      el.listenButton.classList.remove("active");
+    }
+    animateSoundBars(0);
+    return;
+  }
+
+  if (el.listenButton) {
+    el.listenButton.textContent = "MUTE LISTENING";
+    el.listenButton.classList.add("active");
+  }
+
+  if (!audio) {
+    el.speakerName.textContent = "Microphone is off";
+    el.speakerDetail.textContent = "Start Python companion to listen.";
+    el.speakerStrip.classList.remove("listening");
+    animateSoundBars(0);
+    return;
+  }
+
+  const { speaker, confidence, volume, is_recording, remaining, target } = audio;
+
+  // Active voice recording countdown
+  if (is_recording) {
+    el.speakerName.textContent = `REC: SPEAK FOR ${escapeHtml(target.toUpperCase())}`;
+    el.speakerDetail.textContent = `Listening... ${remaining.toFixed(1)}s remaining`;
+    el.speakerStrip.classList.add("listening");
+    animateSoundBars(Math.max(0.35, volume));
+    return;
+  }
+
+  animateSoundBars(volume);
+
+  if (speaker === "Quiet" || !speaker) {
+    el.speakerName.textContent = "Mic: Quiet";
+    el.speakerDetail.textContent = `Ambient noise: ${(volume * 100).toFixed(0)}% · Listening for speech...`;
+    el.speakerStrip.classList.remove("listening");
+  } else if (speaker === "Unknown" || speaker === "Unknown voice" || speaker === "Unknown Voice") {
+    el.speakerName.textContent = "Speaking: Unknown Voice";
+    el.speakerDetail.textContent = `Vol: ${(volume * 100).toFixed(0)}% · Not enrolled in voice index`;
+    el.speakerStrip.classList.add("listening");
+  } else if (speaker === "Mic Offline") {
+    el.speakerName.textContent = "Mic: Offline";
+    el.speakerDetail.textContent = "Microphone stream unavailable";
+    el.speakerStrip.classList.remove("listening");
+    animateSoundBars(0);
+  } else {
+    el.speakerName.textContent = `${escapeHtml(speaker.toUpperCase())} IS SPEAKING`;
+    el.speakerDetail.textContent = `Match: ${confidence}% · SpeechBrain ECAPA`;
+    el.speakerStrip.classList.add("listening");
+  }
+}
+
+// Poll real-time status from Python backend
+async function pollStatus() {
+  try {
+    const status = await apiCall("/api/status");
+    if (!isConnected) {
+      isConnected = true;
+      setModelStatus("ONLINE · PYTHON AI", true);
+      el.scanHint.textContent = "Connected to Python AI engine (InsightFace + YOLO + SpeechBrain).";
+      loadPeople();
+    }
+
+    // Render live updates
+    renderLedger(status.faces, status.objects);
+    renderVoice(status.audio);
+
+    if (isStreaming && status.fps) {
+      el.sourceTitle.textContent = `LIVE CAMERA · ${status.fps.toFixed(0)} FPS`;
+    }
+  } catch (err) {
+    if (isConnected) {
+      isConnected = false;
+      setModelStatus("DISCONNECTED", false);
+      el.scanHint.textContent = "Backend offline. Run: npm start to launch Python companion.";
+      renderVoice(null);
+    }
+  }
+}
+
+// Start camera feed
+function startCamera() {
+  el.stage.classList.add("active");
+  el.stage.dataset.source = "live";
+  el.liveFeed.src = `/video_feed?t=${Date.now()}`;
+  el.sourceTitle.textContent = "LIVE CAMERA";
+  el.cameraButton.innerHTML = "<span>●</span> CAMERA ACTIVE";
+  el.stopButton.disabled = false;
+  isStreaming = true;
+}
+
+// Stop camera feed
+function stopCamera() {
+  el.stage.classList.remove("active");
+  delete el.stage.dataset.source;
+  el.liveFeed.removeAttribute("src");
+  el.sourceTitle.textContent = "NO SOURCE";
+  el.cameraButton.innerHTML = "<span>●</span> OPEN CAMERA";
+  el.stopButton.disabled = true;
+  isStreaming = false;
+  renderLedger([], []);
+}
+
+// Open Enrolment Modal
+function openEnrollModal() {
+  el.enrollForm.reset();
+  el.enrollFeedback.textContent = "";
+  el.dropZone.classList.remove("has-files");
+  el.fileCount.textContent = "1–6 images · saved to recorded/ vault";
+  el.enrollDialog.showModal();
+  setTimeout(() => el.personName.focus(), 100);
+}
+
+// Handle Face Enrolment Form Submit
+async function handleEnrollSubmit(e) {
+  e.preventDefault();
+  const name = el.personName.value.trim();
+  const files = el.enrollmentImages.files;
+  if (!name || !files.length) return;
+
+  el.savePersonButton.disabled = true;
+  el.savePersonButton.textContent = "SAVING FACE...";
+  el.enrollFeedback.textContent = "Processing image via InsightFace...";
+
+  try {
+    const base64Img = await fileToBase64(files[0]);
+    const res = await apiCall("/api/enroll_face", "POST", { name, image: base64Img });
+
+    if (res.ok) {
+      el.enrollFeedback.textContent = `Saved face profile for ${name}!`;
+      await loadPeople();
+      setTimeout(() => el.enrollDialog.close(), 600);
+    } else {
+      throw new Error(res.error || "No clear face found in photo");
+    }
+  } catch (err) {
+    el.enrollFeedback.textContent = `Error: ${err.message}`;
+  } finally {
+    el.savePersonButton.disabled = false;
+    el.savePersonButton.textContent = "SAVE FACE MEMORY";
+  }
+}
+
+// Open Voice Teaching Modal
+function openVoiceModal(personName) {
+  currentVoiceTarget = personName;
+  el.voicePersonName.textContent = personName;
+  el.voiceFeedback.textContent = "Ready to record 5-second voice cue.";
+  el.recordSeconds.textContent = "05";
+  el.recordMeter.classList.remove("recording");
+  el.recordVoiceButton.disabled = false;
+  el.recordVoiceButton.textContent = "RECORD 5-SECOND SAMPLE";
+  el.voiceDialog.showModal();
+}
+
+// Record Voice Cue via Python Backend
+async function handleRecordVoice() {
+  if (!currentVoiceTarget) return;
+
+  el.recordVoiceButton.disabled = true;
+  el.recordVoiceButton.textContent = "RECORDING NOW...";
+  el.recordMeter.classList.add("recording");
+  el.voiceFeedback.textContent = "Speak naturally near the microphone now...";
+
+  try {
+    await apiCall("/api/record_voice", "POST", { name: currentVoiceTarget });
+
+    let remaining = 5.0;
+    clearInterval(voiceCountdownTimer);
+    voiceCountdownTimer = setInterval(() => {
+      remaining -= 0.1;
+      if (remaining <= 0) {
+        clearInterval(voiceCountdownTimer);
+        el.recordSeconds.textContent = "00";
+        el.recordMeter.classList.remove("recording");
+        el.voiceFeedback.textContent = `Voice cue memorized for ${currentVoiceTarget}!`;
+        el.recordVoiceButton.textContent = "COMPLETED";
+        loadPeople();
+        setTimeout(() => el.voiceDialog.close(), 1200);
+      } else {
+        el.recordSeconds.textContent = String(Math.ceil(remaining)).padStart(2, "0");
+      }
+    }, 100);
+  } catch (err) {
+    el.voiceFeedback.textContent = `Recording error: ${err.message}`;
+    el.recordMeter.classList.remove("recording");
+    el.recordVoiceButton.disabled = false;
+    el.recordVoiceButton.textContent = "TRY AGAIN";
+  }
+}
+
+// Open Recorded Vault Folder in Windows File Explorer
+async function handleOpenVault() {
+  try {
+    await apiCall("/api/open_vault", "POST", {});
+  } catch (err) {
+    console.error("Vault open error:", err);
+  }
+}
+
+// Attach Event Listeners
+function setupEvents() {
+  el.cameraButton.onclick = () => (isStreaming ? stopCamera() : startCamera());
+  el.stopButton.onclick = stopCamera;
+  el.vaultButton.onclick = handleOpenVault;
+
+  el.imageInput.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      openEnrollModal();
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.enrollmentImages.files = dt.files;
+      el.dropZone.classList.add("has-files");
+      el.fileCount.textContent = `1 photo selected: ${file.name}`;
+    }
+  };
+
+  el.enrollButton.onclick = openEnrollModal;
+  el.emptyEnrollButton.onclick = openEnrollModal;
+  el.closeEnrollButton.onclick = () => el.enrollDialog.close();
+  el.enrollForm.onsubmit = handleEnrollSubmit;
+
+  el.enrollmentImages.onchange = () => {
+    const count = el.enrollmentImages.files.length;
+    el.dropZone.classList.toggle("has-files", count > 0);
+    el.fileCount.textContent = count ? `${count} photo${count === 1 ? "" : "s"} selected` : "1–6 images · saved to recorded/ vault";
+  };
+
+  el.recordVoiceButton.onclick = handleRecordVoice;
+  el.closeVoiceButton.onclick = () => {
+    clearInterval(voiceCountdownTimer);
+    el.voiceDialog.close();
+  };
+  el.cancelVoiceButton.onclick = () => {
+    clearInterval(voiceCountdownTimer);
+    el.voiceDialog.close();
+  };
+
+  el.clearLogButton.onclick = () => renderLedger([], []);
+  if (el.listenButton) {
+    el.listenButton.onclick = () => {
+      isListening = !isListening;
+      renderVoice(null);
+    };
+  }
+  el.fullscreenButton.onclick = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      el.stage.requestFullscreen?.();
+    }
+  };
+
+  el.privacyButton.onclick = () => el.privacyDialog.showModal();
+  el.closePrivacyButton.onclick = () => el.privacyDialog.close();
+}
+
+// Initialize Application
+function init() {
+  setupEvents();
+  setModelStatus("CONNECTING...", false);
+  loadPeople();
+
+  // Begin real-time state polling (100ms interval for high-responsiveness)
+  pollStatus();
+  statusPollTimer = setInterval(pollStatus, 120);
+
+  // Automatically start camera stream if connected
+  setTimeout(() => {
+    if (isConnected && !isStreaming) {
+      startCamera();
+    }
+  }, 600);
+}
+
+// Start when document is loaded
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

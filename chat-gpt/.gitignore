@@ -1,0 +1,24 @@
+# Environments & Dependencies
+.venv/
+env/
+venv/
+node_modules/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Models, Weights & Embeddings (Privacy)
+*.pt
+*.onnx
+profiles.json
+.speechbrain/
+
+# Secrets & Local Config
+.env
+.env.*
+*.local
+sessions/
+recorded_faces/
+recorded/

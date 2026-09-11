@@ -7,9 +7,6 @@
     <title>Northstar — Field recognition</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" />
     <link rel="stylesheet" href="styles.css" />
-    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -17,7 +14,7 @@
       <header class="masthead">
         <a class="wordmark" href="#top" aria-label="Northstar home"><span class="mark">N</span><span>NORTHSTAR</span></a>
         <p class="edition">FIELD RECOGNITION TOOL <span>—</span> 01</p>
-        <div class="mast-actions"><span class="model-status" id="modelStatus" aria-live="polite"><i></i>LOADING</span><button class="plain-button" id="privacyButton" type="button">PRIVACY NOTE</button></div>
+        <div class="mast-actions"><span class="model-status" id="modelStatus" aria-live="polite"><i></i>CONNECTING</span><button class="plain-button" id="privacyButton" type="button">PRIVACY NOTE</button></div>
       </header>
 
       <section class="intro" id="top">
@@ -29,6 +26,7 @@
         <article class="viewer-panel">
           <div class="panel-topline"><span>VIEWFINDER</span><strong id="sourceTitle">NO SOURCE</strong><button class="expand-button" id="fullscreenButton" type="button" title="Full screen view" aria-label="Toggle full screen view">EXPAND ↗</button></div>
           <div class="stage" id="stage">
+            <img id="liveFeed" alt="Live recognition feed from Python camera" />
             <video id="camera" autoplay muted playsinline></video>
             <img id="photoPreview" alt="Selected photo for recognition" />
             <canvas id="overlay" aria-label="Recognition results"></canvas>
@@ -37,15 +35,15 @@
           <div class="camera-controls">
             <button class="ink-button" id="cameraButton" type="button"><span>●</span> OPEN CAMERA</button>
             <label class="line-button" for="imageInput"><span>↑</span> LOAD IMAGE<input id="imageInput" type="file" accept="image/*" /></label>
-            <button class="line-button" id="captureButton" type="button" disabled><span>□</span> CAPTURE FACE</button>
+            <button class="line-button" id="vaultButton" type="button"><span>📁</span> OPEN VAULT</button>
             <button class="plain-button stop-button" id="stopButton" type="button" disabled>STOP</button>
           </div>
           <p class="system-note" id="scanHint">Models are warming up.</p>
           <p class="file-status" id="fileStatus" hidden aria-live="polite"></p>
           <div class="speaker-strip" id="speakerStrip">
-            <div class="speaker-title"><span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>VOICE CHECK</span></div>
+            <div class="speaker-title"><span class="sound-bars" id="soundBars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>VOICE CHECK</span></div>
             <div class="speaker-readout"><strong id="speakerName">Microphone is off</strong><small id="speakerDetail">Teach a voice cue, then start listening.</small></div>
-            <button class="listen-button" id="listenButton" type="button" disabled>START LISTENING</button>
+            <button class="listen-button" id="listenButton" type="button">START LISTENING</button>
           </div>
         </article>
 
